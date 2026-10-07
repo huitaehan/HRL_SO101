@@ -30,18 +30,63 @@ The demonstration dataset is hosted publicly on Hugging Face Hub:
 
 ## 🚀 Installation
 
+> [!IMPORTANT]
+> **Do not install LeRobot independently.**
+> This repository is a self-contained fork of LeRobot containing the full codebase along with custom SO-101 hardware abstraction and robust evaluation pipelines. Installing this repo installs LeRobot. Running `pip install lerobot` from PyPI will overwrite local modifications and cause dependency conflicts.
+
+> [!NOTE]
+> **Python Version Requirement**: Python **3.12 or newer** is required (`>=3.12`).
+
 ### 1. Clone the repository
 ```bash
 git clone https://github.com/huitaehan/HRL_SO101.git
 cd HRL_SO101
 ```
 
-### 2. Install dependencies
+### 2. Install Dependencies
+
+#### Option A: Recommended (Fast & Conflict-Free with `uv`)
+LeRobot uses [`uv`](https://docs.astral.sh/uv/) and a lockfile (`uv.lock`) for reproducible dependency resolution.
+
 ```bash
-pip install -e .
-# Or with uv:
-uv sync --locked --extra feetech
+# Install uv if you don't already have it
+pip install uv
+
+# Create a clean Python 3.12 virtual environment
+uv venv --python 3.12
+
+# Activate the virtual environment
+# Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+# Linux / macOS:
+source .venv/bin/activate
+
+# Sync locked dependencies including the Feetech servo driver for SO-101
+uv sync --extra feetech
 ```
+
+#### Option B: Alternative (Using Conda & `pip`)
+If you prefer Conda and standard `pip`:
+
+```bash
+# 1. Create a Python 3.12 environment
+conda create -y -n lerobot python=3.12
+conda activate lerobot
+
+# 2. Install PyTorch matching your hardware (e.g. CUDA on Windows/Linux)
+pip install torch torchvision
+
+# 3. Install this repo in editable mode with Feetech servo driver
+# (Always wrap ".[feetech]" in quotes to prevent PowerShell parsing issues)
+pip install -e ".[feetech]"
+```
+
+### 🛠️ Troubleshooting Setup Issues
+
+- **`Package requires Python >= 3.12`**: Check your version with `python --version`. Conda or system defaults often point to Python 3.10 or 3.11, which will fail. Create a fresh Python 3.12+ environment.
+- **`The term '.[feetech]' is not recognized` (PowerShell)**: PowerShell treats square brackets `[` `]` as wildcard patterns. Always wrap the extra in quotes: `pip install -e ".[feetech]"`.
+- **`Microsoft Visual C++ 14.0 or greater is required` (Windows)**: Install the [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) to build native C/C++ packages like `feetech-servo-sdk`.
+- **Infinite dependency resolution with pip**: Use **Option A (`uv sync`)** above, which resolves from `uv.lock` in seconds without backtracking on PyPI.
 
 ---
 
