@@ -1,6 +1,6 @@
 # HRL_SO101
 
-Repository for training, evaluating, and deploying imitation learning policies on the **SO-101 6-DoF robotic arm** using [LeRobot](https://github.com/huggingface/lerobot).
+Repository for training, evaluating, and deploying imitation learning policies on the **SO-101 6-DoF robotic arm** using [LeRobot](https://github.com/huggingface/lerobot), with custom **non-stationary dynamics and robust safety evaluation**.
 
 ---
 
@@ -17,11 +17,11 @@ Repository for training, evaluating, and deploying imitation learning policies o
 
 ## 📦 Dataset
 
-The demonstration dataset is hosted on Hugging Face Hub:
+The demonstration dataset is hosted publicly on Hugging Face Hub:
 - **Repo ID**: [`huitaehan/so101_demo`](https://huggingface.co/datasets/huitaehan/so101_demo)
 - **Episodes**: 48 demonstrations
 - **Task**: *"Pick the object and place it"*
-- **Sensory modalities**:
+- **Sensory Modalities**:
   - `observation.images.top`: 640x480 RGB @ 30 FPS
   - `observation.state`: 6-DoF joint positions
   - `action`: 6-DoF leader joint targets
@@ -66,9 +66,54 @@ Once training finishes, the model checkpoint is saved to:
 
 ---
 
-## 🤖 Real-Robot Deployment & Evaluation
+## 🛡️ Robust Safety & Non-Stationary Dynamics Evaluation
 
-To run the trained policy autonomously on the physical SO-101 follower arm:
+We implemented custom **safety and disturbance injection capabilities** in [`examples/robust_safety_so101_eval.py`](./examples/robust_safety_so101_eval.py) and [`src/lerobot/robots/so_follower/config_so_follower.py`](./src/lerobot/robots/so_follower/config_so_follower.py).
+
+This pipeline evaluates whether a policy can survive sudden, mid-episode physical and system disturbances (triggered at step $T_{\text{perturb}}$):
+
+### 4 Disturbance Functions Implemented:
+
+1. **Hardware Torque Degradation (`--torque-limit`)**:
+   - Programmatically reduces Feetech STS3215 RAM `Torque_Limit` (range 0–1000, default degraded to 250) on specified joints (`shoulder_lift`, `elbow_flex`).
+   - **Simulates**: Motor overheating, voltage drops, mechanical wear, or heavy payload resistance.
+
+2. **Step Latency Injection (`--latency-ms`)**:
+   - Artificially injects execution delays in milliseconds into each control loop step post-perturbation.
+   - **Simulates**: Communication latency, inference bottleneck, or sensor bandwidth throttling.
+
+3. **Temporal Action Queue Lag (`--fifo-buffer-size`)**:
+   - Enforces an $N$-frame FIFO queue lag on model actions (e.g., 3 frames = ~100 ms delay at 30 Hz).
+   - **Simulates**: Transport packet buffering, delayed execution pipelines, and out-of-sync command delivery.
+
+4. **Virtual Gravity Sag / Angular Droop (`--virtual-gravity-sag-deg`)**:
+   - Injects a continuous angular offset droop (in degrees) to target joint setpoints.
+   - **Simulates**: Structural compliance, loose joint fasteners, or unexpected gravitational droop.
+
+### Running Robust Evaluation:
+
+```powershell
+python examples/robust_safety_so101_eval.py `
+    --policy-path outputs/train/act_so101/checkpoints/last/pretrained_model `
+    --port COM6 `
+    --camera-index 1 `
+    --episodes 5 `
+    --max-steps 300 `
+    --perturb-enabled true `
+    --perturb-step 100 `
+    --torque-limit 250 `
+    --latency-ms 20.0 `
+    --fifo-buffer-size 3 `
+    --virtual-gravity-sag-deg 4.0 `
+    --output-dir outputs/robust_safety_eval
+```
+*Outputs JSON metrics containing tracking errors before vs. after perturbation, success rates, and stability logs.*
+
+---
+
+## 🤖 Standard Real-Robot Deployment
+
+To run the trained policy autonomously without perturbations:
 
 ```powershell
 lerobot-record `
@@ -88,7 +133,7 @@ lerobot-record `
 
 ## 🔄 Replay Demonstrations
 
-To verify motor calibration and replay a demonstration physically on the arm:
+To verify motor calibration and physically replay a recorded demonstration on the follower arm:
 
 ```powershell
 lerobot-replay `
