@@ -61,8 +61,11 @@ uv venv --python 3.12
 # Linux / macOS:
 source .venv/bin/activate
 
-# Sync locked dependencies including the Feetech servo driver for SO-101
-uv sync --extra feetech
+# Sync locked dependencies (training libs + Feetech servo driver for SO-101)
+uv sync --extra training --extra feetech
+
+# (Optional) If training on an NVIDIA GPU, install CUDA-enabled PyTorch:
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
 #### Option B: Alternative (Using Conda & `pip`)
@@ -73,18 +76,24 @@ If you prefer Conda and standard `pip`:
 conda create -y -n lerobot python=3.12
 conda activate lerobot
 
-# 2. Install PyTorch matching your hardware (e.g. CUDA on Windows/Linux)
-pip install torch torchvision
+# 2. Install PyTorch with CUDA acceleration (for NVIDIA GPU)
+# For NVIDIA GPU (CUDA 12.4):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# Or for CPU-only:
+# pip install torch torchvision
 
-# 3. Install this repo in editable mode with Feetech servo driver
-# (Always wrap ".[feetech]" in quotes to prevent PowerShell parsing issues)
-pip install -e ".[feetech]"
+# 3. Install this repo in editable mode with training libs + Feetech servo driver
+# (Always wrap the extras in quotes to prevent PowerShell parsing issues)
+pip install -e ".[training,feetech]"
+
+# 4. Verify installation and CUDA availability
+python -c "import torch, torchvision, cv2, serial, feetech_servo_sdk; print(f'CUDA Available: {torch.cuda.is_available()} | Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\"}')"
 ```
 
 ### 🛠️ Troubleshooting Setup Issues
 
 - **`Package requires Python >= 3.12`**: Check your version with `python --version`. Conda or system defaults often point to Python 3.10 or 3.11, which will fail. Create a fresh Python 3.12+ environment.
-- **`The term '.[feetech]' is not recognized` (PowerShell)**: PowerShell treats square brackets `[` `]` as wildcard patterns. Always wrap the extra in quotes: `pip install -e ".[feetech]"`.
+- **`The term '.[training,feetech]' is not recognized` (PowerShell)**: PowerShell treats square brackets `[` `]` as wildcard patterns. Always wrap the extra in quotes: `pip install -e ".[training,feetech]"`.
 - **`Microsoft Visual C++ 14.0 or greater is required` (Windows)**: Install the [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) to build native C/C++ packages like `feetech-servo-sdk`.
 - **Infinite dependency resolution with pip**: Use **Option A (`uv sync`)** above, which resolves from `uv.lock` in seconds without backtracking on PyPI.
 
@@ -98,11 +107,10 @@ Train an **ACT (Action Chunking with Transformers)** policy on the dataset. The 
 lerobot-train \
     --dataset.repo_id=huitaehan/so101_demo \
     --policy.type=act \
-    --policy.device=cuda \
     --output_dir=outputs/train/act_so101 \
     --job_name=act_so101 \
     --batch_size=8 \
-    --training.steps=20000 \
+    --steps=20000 \
     --wandb.enable=false
 ```
 
