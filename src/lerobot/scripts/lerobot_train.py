@@ -34,6 +34,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from pathlib import Path
 from pprint import pformat
 from typing import TYPE_CHECKING, Any
 
@@ -565,6 +566,8 @@ def train(cfg: TrainPipelineConfig) -> None:
 
     # --- processors (overrides built once, as one typed mapping) -------------------------------
     processor_pretrained_path = active_cfg.pretrained_path
+    if processor_pretrained_path is not None and not Path(processor_pretrained_path).is_dir():
+        processor_pretrained_path = str(processor_pretrained_path).replace("\\", "/")
     if not cfg.resume and getattr(active_cfg, "recipe", None) is not None:
         if processor_pretrained_path is not None and is_main_process():
             logging.warning(

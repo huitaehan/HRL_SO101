@@ -344,7 +344,10 @@ def make_policy(
         else:
             # Load a pretrained policy and override the config if needed (for example, if there
             # are inference-time hyperparameters that we want to vary).
-            kwargs["pretrained_name_or_path"] = cfg.pretrained_path
+            pretrained_path = cfg.pretrained_path
+            if pretrained_path is not None and not Path(pretrained_path).is_dir():
+                pretrained_path = str(pretrained_path).replace("\\", "/")
+            kwargs["pretrained_name_or_path"] = pretrained_path
             kwargs["revision"] = cfg.pretrained_revision
             policy = policy_cls.from_pretrained(**kwargs)
     elif cfg.pretrained_path and cfg.use_peft:
