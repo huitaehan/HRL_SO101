@@ -30,328 +30,83 @@ flowchart TD
     S9 -->|Iterate until max_eig <= 0| S1
 ```
 
-# Detailed Pipeline Breakdown
-
-### 1. State Space Sampling (\(x\))
-
-Batches of robot states are sampled across the SO-101 joint limits:
-
-\[
-x =
-\begin{bmatrix}
-q_1 & \cdots & q_6 &
-\dot{q}_1 & \cdots & \dot{q}_6
-\end{bmatrix}^{T}
-\in \mathbb{R}^{12}
-\]
-
-where \(q_i\) represents the joint position and \(\dot{q}_i\) represents the joint velocity.
-
-### 2. Closed-Loop Robot Dynamics (\(f(x)\))
-
-Given the current joint angles \(q\) and velocities \(\dot{q}\), evaluate the system dynamics:
-
-\[
-\dot{x} = f(x)
-\]
-
-The closed-loop dynamics are defined as:
-
-\[
-\boxed{
-\dot{x}
-=
-\begin{bmatrix}
-\dot{q}\\[6pt]
-\ddot{q}
-\end{bmatrix}
-=
-\begin{bmatrix}
-\dot{q}\\[6pt]
-M_{\mathrm{robot}}(q)^{-1}
-\left(
-\tau(q,\dot{q})
--
-C(q,\dot{q})\dot{q}
--
-g(q)
-\right)
-\end{bmatrix}
-}
-\]
-
-where:
-
-- \(M_{\mathrm{robot}}(q)\) is the robot's inertia matrix.
-- \(C(q,\dot{q})\) is the Coriolis and centrifugal matrix.
-- \(g(q)\) is the gravity vector.
-- \(\tau(q,\dot{q})\) is the closed-loop control torque.
-
-### 3. Jacobian Computation (\(A(x)\))
-
-PyTorch autograd computes the Jacobian of the closed-loop dynamics for every sampled state in the batch:
-
-\[
-\boxed{
-A(x)
-=
-\frac{\partial f(x)}{\partial x}
-\in \mathbb{R}^{12\times12}
-}
-\]
-
-This matrix describes the local linearization of the nonlinear dynamics around each sampled state.
-
-### 4. Neural Cholesky Parametrization (\(L(x)\))
-
-A multilayer perceptron (MLP) takes the state vector \(x\in\mathbb{R}^{12}\) as input and predicts the lower-triangular entries of \(L(x)\).
+---
 
-For a \(12\times12\) lower-triangular matrix, the number of independent entries is:
-
-\[
-\boxed{
-N_L
-=
-\frac{12(12+1)}{2}
-=
-78
-}
-\]
-
-The neural network therefore predicts 78 values.
-
-To ensure strictly positive diagonal elements, the following transformation is applied:
-
-\[
-\boxed{
-L_{ii}(x)
-=
-\operatorname{softplus}(l_{ii}(x))
-+
-\epsilon_{\mathrm{diag}}
-}
-\]
+### Step 1: State Space Sampling ($x$)
 
-where:
+Batches of robot states are sampled across the SO-101 physical joint workspace:
 
-\[
-\operatorname{softplus}(z)
-=
-\ln(1+e^z)
-\]
+$$
+x = [q_1, \dots, q_6, \dot{q}_1, \dots, \dot{q}_6]^T \in \mathbb{R}^{12}
+$$
 
-and \(\epsilon_{\mathrm{diag}}>0\) is a small positive constant.
+### Step 2: Closed-Loop Robot Dynamics ($f(x)$)
 
-### 5. Metric Matrix Assembly (\(M(x)\succ0\))
+Given current joint angles $q$ and velocities $\dot{q}$, the closed-loop system dynamics $\dot{x} = f(x)$ are evaluated:
 
-The contraction metric is constructed as:
+$$
+\dot{x} = \begin{bmatrix} \dot{q} \\ \ddot{q} \end{bmatrix} = \begin{bmatrix} \dot{q} \\ M_{\text{robot}}(q)^{-1}\big(\tau(q, \dot{q}) - C(q, \dot{q})\dot{q} - g(q)\big) \end{bmatrix}
+$$
 
-\[
-\boxed{
-M(x)
-=
-L(x)L(x)^T
-+
-\epsilon I_{12}
-}
-\]
+### Step 3: Jacobian Computation ($A(x)$)
 
-where:
+PyTorch autograd computes the exact Jacobian matrix for every sampled state in the batch:
 
-- \(L(x)\in\mathbb{R}^{12\times12}\) is the learned lower-triangular matrix.
-- \(I_{12}\) is the \(12\times12\) identity matrix.
-- \(\epsilon>0\) is a small regularization constant.
+$$
+A(x) = \frac{\partial f}{\partial x} \in \mathbb{R}^{12 \times 12}
+$$
 
-By construction:
-
-\[
-\boxed{
-M(x)=M(x)^T\succ0
-}
-\]
+### Step 4: Neural Cholesky Parametrization ($L(x)$)
 
-Therefore, the metric matrix is **guaranteed to be symmetric and positive-definite** for every state \(x\), regardless of the neural network weights.
-
-### 6. Directional Time Derivative (\(\dot{M}(x)\))
+An MLP takes $x \in \mathbb{R}^{12}$ and outputs the $\frac{12 \times 13}{2} = 78$ lower-triangular entries of $L(x)$. Positive diagonal elements are strictly enforced using:
 
-Along system trajectories, the metric \(M(x(t))\) changes over time.
+$$
+L_{ii}(x) = \text{softplus}(l_{ii}) + \epsilon_{\text{diag}}
+$$
 
-Using the chain rule:
+### Step 5: Metric Matrix Assembly ($M(x) \succ 0$)
 
-\[
-\boxed{
-\dot{M}(x)
-=
-\sum_{k=1}^{12}
-\frac{\partial M(x)}{\partial x_k}
-f_k(x)
-}
-\]
+The metric matrix is reconstructed via Cholesky factor multiplication:
 
-Equivalently:
+$$
+M(x) = L(x) L(x)^T + \epsilon I
+$$
 
-\[
-\dot{M}(x)
-=
-D M(x)[f(x)]
-\]
+By the Cholesky factorization theorem, $M(x)$ is **guaranteed to be symmetric and strictly positive-definite** everywhere for any network weights.
 
-where \(D M(x)[f(x)]\) denotes the directional derivative of the metric along the system vector field.
+### Step 6: Directional Time-Derivative ($\dot{M}(x)$)
 
-This quantity is computed efficiently using PyTorch autograd.
+Along system trajectories, $M(x(t))$ changes over time according to the chain rule:
 
-### 7. Contraction Matrix Formation (\(R(x)\))
+$$
+\dot{M}(x) = \sum_{k=1}^{12} \frac{\partial M(x)}{\partial x_k} f_k(x)
+$$
 
-The differential Lyapunov matrix is assembled as:
+This is computed efficiently via autograd directional derivatives along the velocity field $f(x)$.
 
-\[
-\boxed{
-R(x)
-=
-\dot{M}(x)
-+
-A(x)^T M(x)
-+
-M(x)A(x)
-+
-2\lambda M(x)
-}
-\]
+### Step 7: Contraction Matrix Formation ($R(x)$)
 
-where \(\lambda>0\) is the desired contraction rate.
+Assemble the differential Lyapunov contraction condition matrix:
 
-The contraction condition requires:
+$$
+R(x) = \dot{M}(x) + A(x)^T M(x) + M(x) A(x) + 2\lambda M(x)
+$$
 
-\[
-\boxed{
-R(x)\preceq0
-}
-\]
+### Step 8: Eigenvalue Penalty Loss ($\mathcal{L}_{\text{LMI}}$)
 
-or, equivalently:
+Compute the maximum eigenvalue $\lambda_{\max}(R(x))$ using `torch.linalg.eigvalsh(R)`:
 
-\[
-\boxed{
-\lambda_{\max}(R(x))\leq0
-}
-\]
+$$
+\mathcal{L} = \frac{1}{B} \sum_{k=1}^B \text{ReLU}\big(\lambda_{\max}(R(x_k))\big)^2 + \beta \text{Tr}(M(x_k))
+$$
 
-for all states in the region of interest.
+- If $\lambda_{\max}(R) \le 0$, the contraction constraint is satisfied and penalty is $0$.
+- If $\lambda_{\max}(R) > 0$, the penalty squares the positive violation to drive it below $0$.
 
-### 8. Eigenvalue Penalty Loss (\(\mathcal{L}_{\mathrm{LMI}}\))
+### Step 9: Optimization Step
 
-The maximum eigenvalue of \(R(x)\) is computed using:
+Adam computes $\nabla_\theta \mathcal{L}$ with respect to the MLP weights $\theta$ and updates the network. Once $\lambda_{\max}(R) \le 0$ across the state space, the neural network becomes the certified contraction metric $M(x)$.
 
-`torch.linalg.eigvalsh(R)`
-
-The training loss is defined as:
-
-\[
-\boxed{
-\mathcal{L}
-=
-\frac{1}{B}
-\sum_{k=1}^{B}
-\left[
-\operatorname{ReLU}
-\left(
-\lambda_{\max}(R(x_k))
-\right)
-\right]^2
-+
-\frac{\beta}{B}
-\sum_{k=1}^{B}
-\operatorname{Tr}(M(x_k))
-}
-\]
-
-where:
-
-- \(B\) is the batch size.
-- \(\lambda_{\max}(R(x_k))\) is the largest eigenvalue of the contraction matrix.
-- \(\operatorname{ReLU}(z)=\max(0,z)\).
-- \(\beta\geq0\) is the metric regularization coefficient.
-- \(\operatorname{Tr}(M(x_k))\) is the trace of the learned metric.
-
-**Contraction constraint satisfaction:**
-
-If
-
-\[
-\lambda_{\max}(R(x_k))\leq0,
-\]
-
-then
-
-\[
-\mathcal{L}_{\mathrm{LMI}}(x_k)=0.
-\]
-
-**Contraction constraint violation:**
-
-If
-
-\[
-\lambda_{\max}(R(x_k))>0,
-\]
-
-then
-
-\[
-\mathcal{L}_{\mathrm{LMI}}(x_k)
-=
-\left[
-\lambda_{\max}(R(x_k))
-\right]^2.
-\]
-
-The squared penalty encourages the optimizer to reduce positive eigenvalues and satisfy the contraction inequality.
-
-### 9. Optimization Step
-
-The Adam optimizer computes the gradient of the loss with respect to the neural network parameters \(\theta\):
-
-\[
-\boxed{
-\nabla_{\theta}\mathcal{L}
-=
-\frac{\partial\mathcal{L}}{\partial\theta}
-}
-\]
-
-The network parameters are then updated iteratively:
-
-\[
-\boxed{
-\theta_{t+1}
-=
-\operatorname{AdamUpdate}
-\left(
-\theta_t,
-\nabla_{\theta}\mathcal{L}
-\right)
-}
-\]
-
-The objective is to learn a state-dependent metric \(M_{\theta}(x)\) satisfying:
-
-\[
-\boxed{
-\dot{M}_{\theta}(x)
-+
-A(x)^T M_{\theta}(x)
-+
-M_{\theta}(x)A(x)
-\preceq
--2\lambda M_{\theta}(x)
-}
-\]
-
-throughout the region of interest.
-
-Once this condition is verified over the entire specified state-space region, the learned metric can serve as a **certified contraction metric** for the closed-loop robot dynamics.
-
-**Important:** Satisfying the contraction inequality at sampled training points alone does not establish a formal global or regional certificate. Formal certification requires additional verification that the inequality holds throughout the specified continuous state-space region.
 ---
 
 ## Benchmark Comparison: Classical SOS vs. Neural CCM
@@ -405,13 +160,7 @@ python examples/ccm/eval_ccm.py --checkpoint outputs/ccm/metric_pendulum.pt
 
 3. **Riemannian Distance Simulation:**
    - Starts two neighboring trajectories $x_1(t)$ and $x_2(t)$.
-   - Computes Riemannian distance:
-   
-     $$
-     d_M(t) = \sqrt{\delta x(t)^T M(x_1(t)) \delta x(t)}
-     $$
-     
-   - Confirms exponential convergence towards zero ($d_M(t) \le d_M(0) e^{-\lambda t}$).
+   - Computes Riemannian distance $d_M(t) = \sqrt{\delta x(t)^T M(x_1(t)) \delta x(t)}$ and confirms exponential convergence towards zero ($d_M(t) \le d_M(0) e^{-\lambda t}$).
 
 4. **Matrix Inspection:**
    - Displays the actual numeric values of the learned $12 \times 12$ matrix $M(x)$ at nominal robot configurations.
