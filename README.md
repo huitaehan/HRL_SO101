@@ -1,6 +1,6 @@
 # HRL_SO101
 
-Repository for training, evaluating, and deploying imitation learning policies on the **SO-101 6-DoF robotic arm** using [LeRobot](https://github.com/huggingface/lerobot), with custom **non-stationary dynamics and robust safety evaluation**.
+Repository for training, evaluating, and deploying imitation learning policies on the **SO-101 6-DoF robotic arm** using [LeRobot](https://github.com/huggingface/lerobot), with custom **non-stationary dynamics and robust safety evaluation**, and **Neural Contraction Metrics (CCM)**.
 
 ---
 
@@ -161,6 +161,25 @@ python examples/robust_safety_so101_eval.py `
     --output-dir outputs/robust_safety_eval
 ```
 *Outputs JSON metrics containing tracking errors before vs. after perturbation, success rates, and stability logs.*
+
+---
+
+## 🔬 Contraction Theory & Neural CCM Research
+
+We implemented **Neural Contraction Metrics (CCM)** for the SO-101 6-DoF arm to mathematically guarantee robust trajectory tracking and exponential convergence under non-linear disturbances and model shifts.
+
+- 📖 **Documentation & Full 9-Step Pipeline**: [`examples/ccm/README.md`](./examples/ccm/README.md)
+- 🧠 **Training Script**: [`examples/ccm/neural_ccm.py`](./examples/ccm/neural_ccm.py)
+- 🔍 **Evaluation & Verification**: [`examples/ccm/eval_ccm.py`](./examples/ccm/eval_ccm.py)
+
+### Quick Commands (Runs on Laptop CPU):
+```bash
+# Train Neural CCM for 6-DOF SO-101 (12D state space, ~17s on CPU):
+python examples/ccm/neural_ccm.py --system so101 --epochs 250 --batch-size 64
+
+# Evaluate positive-definiteness M(x) > 0 and verify contraction R(x) <= 0:
+python examples/ccm/eval_ccm.py --checkpoint outputs/ccm/metric_so101.pt
+```
 
 ---
 
