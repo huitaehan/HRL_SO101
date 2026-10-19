@@ -11,6 +11,64 @@ where:
 
 ---
 
+## Step-by-Step Process: How $M(x)$ Is Found
+
+The computer does not guess or calculate $M(x)$ by hand. It trains a neural network to satisfy the mathematical contraction condition via the following **9-step algorithmic pipeline**:
+
+```mermaid
+flowchart TD
+    S1["1. State Space Sampling<br/>x = [q, dq] in R^12"] --> S2["2. Forward Dynamics<br/>f(x) = [dq, ddq]"]
+    S2 --> S3["3. Exact Jacobian<br/>A(x) = df/dx"]
+    S1 --> S4["4. Neural Cholesky Factor<br/>MLP(x) -> L(x) with diag > 0"]
+    S4 --> S5["5. Metric Construction<br/>M(x) = L(x)L(x)^T + eps*I"]
+    S2 & S5 --> S6["6. Directional Time-Derivative<br/>M_dot(x) = dM/dt along f(x)"]
+    S3 & S5 & S6 --> S7["7. Contraction Matrix<br/>R(x) = M_dot + A^T M + M A + 2*lambda*M"]
+    S7 --> S8["8. Eigenvalue Violation Loss<br/>Loss = ReLU(max_eig(R))^2"]
+    S8 --> S9["9. Backpropagation & Update<br/>Adam updates MLP weights theta"]
+    S9 -->|Repeat until max_eig <= 0| S1
+```
+
+### Detailed Pipeline Breakdown:
+
+1. **State Space Sampling ($x$):**
+   Batches of states are sampled across the SO-101 joint limits:
+   $$x = [q_1, \dots, q_6, \dot{q}_1, \dots, \dot{q}_6]^T \in \mathbb{R}^{12}$$
+
+2. **Closed-Loop Robot Dynamics ($f(x)$):**
+   Given current angles $q$ and velocities $\dot{q}$, evaluate the system dynamics $\dot{x} = f(x)$:
+   $$\dot{x} = \begin{bmatrix} \dot{q} \\ \ddot{q} \end{bmatrix} = \begin{bmatrix} \dot{q} \\ M_{\text{robot}}(q)^{-1}(\tau(q, \dot{q}) - C(q, \dot{q})\dot{q} - g(q)) \end{bmatrix}$$
+
+3. **Jacobian Computation ($A(x)$):**
+   PyTorch autograd computes the exact Jacobian $A(x) = \frac{\partial f}{\partial x} \in \mathbb{R}^{12 \times 12}$ for every sampled state.
+
+4. **Neural Cholesky Parametrization ($L(x)$):**
+   An MLP takes $x \in \mathbb{R}^{12}$ and predicts the $\frac{12 \times 13}{2} = 78$ entries of a lower-triangular matrix $L(x)$.
+   Positive diagonal elements are enforced using $L_{ii}(x) = \text{softplus}(l_{ii}) + \epsilon_{\text{diag}}$.
+
+5. **Metric Matrix Assembly ($M(x) \succ 0$):**
+   $$M(x) = L(x) L(x)^T + \epsilon I$$
+   By the Cholesky property, $M(x)$ is **guaranteed to be symmetric and positive-definite** everywhere for any network weights.
+
+6. **Directional Time-Derivative ($\dot{M}(x)$):**
+   Along system trajectories, $M(x(t))$ changes over time. Using the chain rule:
+   $$\dot{M}(x) = \sum_{k=1}^{12} \frac{\partial M(x)}{\partial x_k} f_k(x)$$
+   This is computed via autograd directional derivatives along the vector field $f(x)$.
+
+7. **Contraction Matrix Formation ($R(x)$):**
+   Assemble the differential Lyapunov matrix:
+   $$R(x) = \dot{M}(x) + A(x)^T M(x) + M(x) A(x) + 2\lambda M(x)$$
+
+8. **Eigenvalue Penalty Loss ($\mathcal{L}_{\text{LMI}}$):**
+   Compute the maximum eigenvalue $\lambda_{\max}(R(x))$ using `torch.linalg.eigvalsh(R)`.
+   $$\mathcal{L} = \frac{1}{B} \sum_{k=1}^B \text{ReLU}\big(\lambda_{\max}(R(x_k))\big)^2 + \beta \text{Tr}(M(x_k))$$
+   * If $\lambda_{\max}(R) \le 0$, the constraint is satisfied and penalty is $0$.
+   * If $\lambda_{\max}(R) > 0$, the penalty squares the violation to drive it below 0.
+
+9. **Optimization Step:**
+   Adam computes $\nabla_\theta \mathcal{L}$ with respect to the MLP weights and updates the network. Once $\lambda_{\max}(R) \le 0$ across the state space, the neural network becomes the certified contraction metric $M(x)$.
+
+---
+
 ## Benchmark Comparison: Classical SOS vs. Neural CCM
 
 | Dimension | Classical SOS (Drake + MOSEK) | Neural CCM (`neural_ccm.py`) |
@@ -23,9 +81,7 @@ where:
 
 ---
 
-## 1. Training
-
-To train the contraction metric model:
+## 1. Training Commands
 
 ### A. 1-DOF Damped Pendulum (Quick Test, ~1 second on CPU)
 ```bash
@@ -43,7 +99,7 @@ Saved checkpoint: `outputs/ccm/metric_so101.pt`
 
 ## 2. Inspecting & Evaluating Results
 
-Use `examples/ccm/eval_ccm.py` to evaluate any trained checkpoint.
+Use `examples/ccm/eval_ccm.py` to evaluate any trained checkpoint:
 
 ```bash
 # Evaluate SO-101 Arm Metric:
@@ -56,34 +112,15 @@ python examples/ccm/eval_ccm.py --checkpoint outputs/ccm/metric_pendulum.pt
 ### What `eval_ccm.py` Reports:
 
 1. **Strict Positive Definiteness Check ($M(x) \succ 0$):**
-   * Confirms that $\lambda_{\min}(M(x)) > 0$ across thousands of unseen test states.
-   * Reports the average and maximum condition number $\kappa(M(x)) = \frac{\lambda_{\max}}{\lambda_{\min}}$ to ensure the metric is well-conditioned.
+   * Confirms $\lambda_{\min}(M(x)) > 0$ across thousands of unseen test states.
+   * Reports condition number $\kappa(M(x)) = \frac{\lambda_{\max}}{\lambda_{\min}}$ to ensure numerical stability.
 
 2. **Contraction Condition Check ($R(x) \preceq 0$):**
-   * Calculates the maximum eigenvalue of the contraction matrix $R(x)$.
-   * When $\lambda_{\max}(R) \le 0$, trajectories are certified to contract exponentially.
+   * Calculates maximum eigenvalue of $R(x)$. When $\le 0$, trajectories are certified to contract exponentially.
 
 3. **Riemannian Distance Simulation:**
    * Starts two neighboring trajectories $x_1(t)$ and $x_2(t)$.
-   * Computes the differential Riemannian distance:
-     $$d_M(t) = \sqrt{\delta x(t)^T M(x_1(t)) \delta x(t)}$$
-   * Verifies that the Riemannian distance decays towards zero as time progresses ($d_M(t) \le d_M(0) e^{-\lambda t}$).
+   * Computes Riemannian distance $d_M(t) = \sqrt{\delta x(t)^T M(x_1(t)) \delta x(t)}$ and confirms exponential convergence.
 
 4. **Matrix Inspection:**
    * Displays the actual numeric values of the learned $12 \times 12$ matrix $M(x)$ at nominal robot configurations.
-
----
-
-## Architecture Details
-
-1. **Guaranteed Positive Definiteness ($M(x) \succ 0$):**
-   The neural network outputs the lower-triangular entries of a Cholesky matrix $L(x)$ with positive diagonals (`softplus`). The metric is computed as:
-   $$M(x) = L(x) L(x)^T + \epsilon I$$
-
-2. **Directional Derivative ($\dot{M}(x)$):**
-   Calculated using automatic differentiation along the velocity field $f(x)$:
-   $$\dot{M}(x) = \sum_{k=1}^{2n} \frac{\partial M(x)}{\partial x_k} f_k(x)$$
-
-3. **Loss Function:**
-   $$R(x) = \dot{M}(x) + A(x)^T M(x) + M(x) A(x) + 2\lambda M(x)$$
-   $$\mathcal{L} = \frac{1}{B} \sum_{k=1}^B \text{ReLU}\big(\lambda_{\max}(R(x_k))\big)^2 + \beta \text{Tr}(M(x_k))$$
