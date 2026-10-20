@@ -119,9 +119,26 @@ Once training finishes, the model checkpoint is saved to:
 
 ---
 
+## 📂 Repository Modules & Custom Extensions
+
+This repository enhances standard LeRobot with three separated modules:
+
+```
+examples/
+├── safety/       # 🛡️ Real-robot perturbation & non-stationary dynamics evaluation
+├── ccm/          # 🔬 Neural Contraction Metrics (CCM) solver & Riemannian stability
+└── smolvla/      # 🤖 SmolVLA multimodal Vision-Language-Action training & deployment
+```
+
+- [🛡️ Safety & Disturbance Evaluation](./examples/safety/README.md) — Real-world evaluation under hardware torque loss, latency, and queue lag.
+- [🔬 Neural Contraction Metrics (CCM)](./examples/ccm/README.md) — Solves for metric $M(x)$ satisfying the contraction LMI with exponential convergence guarantees.
+- [🤖 SmolVLA Policy](./examples/smolvla/README.md) — Compact multimodal VLA policy leveraging SmolVLM and flow-matching action generation.
+
+---
+
 ## 🛡️ Robust Safety & Non-Stationary Dynamics Evaluation
 
-We implemented custom **safety and disturbance injection capabilities** in [`examples/robust_safety_so101_eval.py`](./examples/robust_safety_so101_eval.py) and [`src/lerobot/robots/so_follower/config_so_follower.py`](./src/lerobot/robots/so_follower/config_so_follower.py).
+We implemented custom **safety and disturbance injection capabilities** in [`examples/safety/robust_safety_so101_eval.py`](./examples/safety/robust_safety_so101_eval.py) and [`src/lerobot/robots/so_follower/config_so_follower.py`](./src/lerobot/robots/so_follower/config_so_follower.py).
 
 This pipeline evaluates whether a policy can survive sudden, mid-episode physical and system disturbances (triggered at step $T_{\text{perturb}}$):
 
@@ -146,7 +163,7 @@ This pipeline evaluates whether a policy can survive sudden, mid-episode physica
 ### Running Robust Evaluation:
 
 ```powershell
-python examples/robust_safety_so101_eval.py `
+python examples/safety/robust_safety_so101_eval.py `
     --policy-path outputs/train/act_so101/checkpoints/last/pretrained_model `
     --port COM6 `
     --camera-index 1 `
@@ -171,6 +188,7 @@ We implemented **Neural Contraction Metrics (CCM)** for the SO-101 6-DoF arm to 
 - 📖 **Documentation & Full 9-Step Pipeline**: [`examples/ccm/README.md`](./examples/ccm/README.md)
 - 🧠 **Training Script**: [`examples/ccm/neural_ccm.py`](./examples/ccm/neural_ccm.py)
 - 🔍 **Evaluation & Verification**: [`examples/ccm/eval_ccm.py`](./examples/ccm/eval_ccm.py)
+- 📊 **Metric Visualization**: [`examples/ccm/visualize_ccm.py`](./examples/ccm/visualize_ccm.py)
 
 ### Quick Commands (Runs on Laptop CPU):
 ```bash
@@ -179,6 +197,30 @@ python examples/ccm/neural_ccm.py --system so101 --epochs 250 --batch-size 64
 
 # Evaluate positive-definiteness M(x) > 0 and verify contraction R(x) <= 0:
 python examples/ccm/eval_ccm.py --checkpoint outputs/ccm/metric_so101.pt
+
+# Visualize 12x12 metric heatmaps and Riemannian convergence curves:
+python examples/ccm/visualize_ccm.py --checkpoint outputs/ccm/metric_so101.pt
+```
+
+---
+
+## 🤖 SmolVLA: Vision-Language-Action Policy
+
+SmolVLA brings compact multimodal instruction-following policies to the SO-101 arm, pairing a lightweight SmolVLM backbone with a flow-matching action expert:
+
+- 📖 **Documentation & Architecture Guide**: [`examples/smolvla/README.md`](./examples/smolvla/README.md)
+- 🏗️ **Policy Code**: [`src/lerobot/policies/smolvla/`](./src/lerobot/policies/smolvla/)
+
+### Training SmolVLA on SO-101:
+```bash
+lerobot-train \
+    --dataset.repo_id=huitaehan/so101_demo \
+    --policy.type=smolvla \
+    --output_dir=outputs/train/smolvla_so101 \
+    --job_name=smolvla_so101 \
+    --batch_size=8 \
+    --steps=20000 \
+    --wandb.enable=false
 ```
 
 ---

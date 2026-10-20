@@ -114,12 +114,14 @@ def evaluate_metric(checkpoint_path: str, num_eval_samples: int = 2000, device_s
         x2 = x2 + f2 * dt
 
     # 4. Print sample M(x) at nominal zero pose
-    print(f"\n--- 4. Sample Learned M(x) Matrix at Nominal Pose (q=0, dq=0) ---")
+    print(f"\n--- 4. Learned M(x) Matrix at Nominal Pose (q=0, dq=0) ---")
     with torch.no_grad():
         x_zero = torch.zeros(1, state_dim, device=device)
         M_zero = metric(x_zero).squeeze(0)
     print(f"Matrix shape: {M_zero.shape}")
-    print(f"Top-left 4x4 block of M(0):\n{M_zero[:4, :4].cpu().numpy().round(4)}")
+    import numpy as np
+    np.set_printoptions(precision=4, suppress=True, linewidth=120)
+    print(f"Full {state_dim}x{state_dim} Matrix M(0):\n{M_zero.cpu().numpy()}")
 
 
 if __name__ == "__main__":
