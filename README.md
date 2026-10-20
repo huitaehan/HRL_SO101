@@ -28,6 +28,18 @@ The demonstration dataset is hosted publicly on Hugging Face Hub:
 
 ---
 
+## 📂 Modular Pipelines
+
+This repository is organized into self-contained workflow modules under `examples/`:
+
+| Module | Description | Guide |
+|---|---|---|
+| **SmolVLA** | Vision-Language-Action foundation model (`smolvla_base`) post-training & SO-101 deployment | [`examples/smolvla/README.md`](examples/smolvla/README.md) |
+| **Safety Filters** | Robust safety evaluation, perturbations, and Control Barrier Function (CBF) | [`examples/safety/README.md`](examples/safety/README.md) |
+| **CCM Pipeline** | Neural Contraction Control Metrics & Pinocchio SO-101 dynamics | [`examples/ccm/README.md`](examples/ccm/README.md) |
+
+---
+
 ## 🚀 Installation
 
 > [!IMPORTANT]

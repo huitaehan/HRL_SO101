@@ -1,23 +1,26 @@
 # SmolVLA: Compact Vision-Language-Action Policy
 
-This module documents and provides workflows for **SmolVLA**, a lightweight Vision-Language-Action (VLA) model designed for efficient, affordable robotic manipulation with natural language task conditioning.
+This module documents and provides workflows for **SmolVLA**, a lightweight Vision-Language-Action (VLA) foundation model designed for efficient, affordable robotic manipulation with natural language task conditioning on the **SO-101 6-DoF robotic arm**.
 
-Implementation: [`src/lerobot/policies/smolvla/`](../../src/lerobot/policies/smolvla/)
+- **Core Implementation**: [`src/lerobot/policies/smolvla/`](../../src/lerobot/policies/smolvla/)
+- **Target Hardware**: SO-101 Follower Arm (`COM6`), Top Camera (`index=1`, 640x480 @ 30 FPS)
+- **Pretrained Checkpoint**: [`lerobot/smolvla_base`](https://huggingface.co/lerobot/smolvla_base) (450M parameters)
+- **Demonstration Dataset**: [`huitaehan/so101_demo`](https://huggingface.co/datasets/huitaehan/so101_demo) (48 episodes, *"Pick the object and place it"*)
 
 ---
 
 ## 🧠 Architecture Overview
 
-SmolVLA combines a compact Vision-Language Model (VLM) backbone with an expressive flow-matching action expert:
+SmolVLA couples a compact Vision-Language Model (VLM) backbone with an expressive flow-matching action expert:
 
 ```mermaid
 flowchart LR
-    Img["Camera Images<br/>(e.g., 512x512)"] --> VLM["SmolVLM Backbone<br/>(Vision + Text Embeddings)"]
-    Txt["Language Prompt<br/>('Pick up the object')"] --> VLM
-    VLM --> Tokens["Multimodal Feature Tokens"]
+    Img["Camera View<br/>(observation.images.top)"] --> VLM["SmolVLM Backbone<br/>(SmolVLM2-500M)"]
+    Txt["Language Prompt<br/>('Pick up the block')"] --> VLM
+    VLM --> Tokens["Multimodal Tokens<br/>(Contextual Representations)"]
     Tokens --> Expert["Flow Matching Action Expert<br/>(Cross-Attention Layers)"]
-    State["Robot Proprioception<br/>q in R^6"] --> Expert
-    Expert --> Actions["Action Chunk<br/>(50 steps x 6 DoF)"]
+    State["SO-101 Joint State<br/>q in R^6"] --> Expert
+    Expert --> Actions["Action Trajectory Chunk<br/>(50 steps x 6 DoF)"]
 ```
 
 1. **VLM Backbone ([`smolvlm_with_expert.py`](../../src/lerobot/policies/smolvla/smolvlm_with_expert.py))**:
@@ -30,56 +33,140 @@ flowchart LR
 
 ---
 
-## 🏋️ Training SmolVLA on SO-101
+## 🛠️ Recent Fixes & Compatibility (PyTorch 2.11+)
 
-To train a SmolVLA policy on the demonstration dataset:
-
-```bash
-lerobot-train \
-    --dataset.repo_id=huitaehan/so101_demo \
-    --policy.type=smolvla \
-    --output_dir=outputs/train/smolvla_so101 \
-    --job_name=smolvla_so101 \
-    --batch_size=8 \
-    --steps=20000 \
-    --wandb.enable=false
-```
-
-### Key Hyperparameters ([`configuration_smolvla.py`](../../src/lerobot/policies/smolvla/configuration_smolvla.py))
-
-- `n_action_steps`: `50` (action chunk prediction horizon)
-- `resize_imgs_with_padding`: `(512, 512)`
-- `tokenizer_max_length`: `48` tokens
-- `vlm_model_name`: Pretrained SmolVLM base model
-- `use_delta_joint_actions_aloha`: Joint delta or absolute setpoint toggle
+The codebase includes specific compatibility patches for PyTorch 2.11+ and Transformers 5.x:
+- **Boolean Mask Constraint**: PyTorch 2.11 enforces that `torch.where(condition, x, y)` strictly requires a boolean condition. In [`smolvlm_with_expert.py`](../../src/lerobot/policies/smolvla/smolvlm_with_expert.py#L560), attention masks are explicitly cast with `.bool()`.
+- **Language Mask Type Preservation**: Language attention masks from Hugging Face tokenizers (`int64`) are cast to `bool` in [`modeling_smolvla.py`](../../src/lerobot/policies/smolvla/modeling_smolvla.py#L616) and [`vla_utils.py`](../../src/lerobot/policies/common/vla_utils.py#L89) to prevent unintended tensor promotion to `Long`.
 
 ---
 
-## 🤖 Evaluation & Deployment on SO-101
+## 🧪 Step 0: Dry-Run Verification (Completed [✓])
 
-Once trained, deploy the SmolVLA checkpoint to control the physical SO-101 follower arm:
+Validate dependencies, model architecture, tensor shapes, and loss/inference passes on CPU without needing hardware connected:
 
 ```powershell
-lerobot-record `
+python examples/smolvla/verify_smolvla.py --batch-size 2 --chunk-size 50 --num-steps 5
+```
+
+**Verification Results:**
+- ✅ **Backbone & Expert initialized**: ~360M VLM Backbone + ~90M Action Expert (450M total).
+- ✅ **Synthetic SO-101 Batch**: 6-DoF joint state, 6-DoF action chunks, top camera images (`480x640`).
+- ✅ **Flow Matching Loss Pass**: Clean gradient flow and loss computation.
+- ✅ **Inference Pass**: 50-step receding-horizon action chunk prediction and FIFO queue handling.
+
+---
+
+## 🚀 How to Post-Train (Fine-Tune) from Current Point
+
+SmolVLA is a **pretrained base foundation model** (`lerobot/smolvla_base`). You do **not** train from scratch; you only perform **post-training (fine-tuning / adaptation)** on your SO-101 demonstrations.
+
+### Phase 1: Verify Demonstration Dataset
+Inspect your existing dataset metadata to ensure all modalities match the policy:
+
+```powershell
+python inspect_dataset.py
+```
+Expected output:
+- **Repo ID**: `huitaehan/so101_demo`
+- **Features**: `observation.images.top` (480, 640, 3), `observation.state` (6,), `action` (6,)
+- **Episodes**: 48 demonstrations
+
+---
+
+### Phase 2: Run Post-Training (Fine-Tuning)
+
+#### Option A: Fast / Action-Expert Only (Recommended)
+Freezes the SmolVLM vision encoder and only updates the ~90M Action Expert and projection layers. This trains fast, uses significantly less VRAM (~6–8 GB), and prevents catastrophic forgetting of language understanding:
+
+```powershell
+python src/lerobot/scripts/lerobot_train.py `
+    --policy.path=lerobot/smolvla_base `
+    --dataset.repo_id=huitaehan/so101_demo `
+    --output_dir=outputs/train/smolvla_so101_expert `
+    --job_name=smolvla_so101_expert `
+    --batch_size=16 `
+    --steps=20000 `
+    --policy.freeze_vision_encoder=true `
+    --policy.train_expert_only=true `
+    --policy.device=cuda `
+    --wandb.enable=false
+```
+
+#### Option B: Full Fine-Tuning
+Fine-tunes both the SmolVLM vision backbone and the Action Expert (requires an NVIDIA GPU with $\ge$16 GB VRAM or Google Colab A100):
+
+```powershell
+python src/lerobot/scripts/lerobot_train.py `
+    --policy.path=lerobot/smolvla_base `
+    --dataset.repo_id=huitaehan/so101_demo `
+    --output_dir=outputs/train/smolvla_so101_full `
+    --job_name=smolvla_so101_full `
+    --batch_size=8 `
+    --steps=20000 `
+    --policy.freeze_vision_encoder=false `
+    --policy.train_expert_only=false `
+    --policy.device=cuda `
+    --wandb.enable=false
+```
+
+> [!TIP]
+> **No Local GPU?**
+> You can train on Google Colab for free or low cost:
+> 1. Open the [SmolVLA Colab Notebook](https://colab.research.google.com/github/huggingface/notebooks/blob/main/lerobot/training-smolvla.ipynb).
+> 2. Set `--dataset.repo_id=huitaehan/so101_demo` and `--policy.path=lerobot/smolvla_base`.
+> 3. Download the resulting checkpoint folder into `outputs/train/smolvla_so101/`.
+
+---
+
+## ⚡ Testing Pretrained Base Weights on Hardware (Zero-Shot Trial)
+
+Can you test the un-finetuned `lerobot/smolvla_base` directly on the physical SO-101 arm? **Yes, for communication and pipeline validation.**
+
+A dedicated script is available in [`examples/tutorial/smolvla/using_smolvla_example.py`](../../examples/tutorial/smolvla/using_smolvla_example.py).
+
+### Safety Checklist Before Running:
+> [!CAUTION]
+> Because `lerobot/smolvla_base` was trained on different camera mounts and table heights, its zero-shot action predictions will not be millimeter-accurate to your desk.
+> 1. **Clear the workspace**: Ensure no fragile objects or obstacles are within the arm's reach.
+> 2. **Emergency Disconnect**: Keep one hand on the USB cable or power supply.
+> 3. **Elevate or Free-Space Test**: Place the arm where it cannot collide with the desk surface during initial motions.
+
+### Running the Live Hardware Test:
+
+1. Confirm your COM ports:
+   ```powershell
+   python -m serial.tools.list_ports
+   ```
+2. Run the policy streaming script:
+   ```powershell
+   python examples/tutorial/smolvla/using_smolvla_example.py
+   ```
+
+---
+
+## 🤖 Real-World Deployment & Evaluation (Post-Trained Model)
+
+Once post-training finishes, evaluate the model on the physical arm:
+
+```powershell
+python src/lerobot/scripts/lerobot_record.py `
     --robot.type=so101_follower `
     --robot.port=COM6 `
     --robot.id=my_follower_arm `
     --robot.cameras="{top: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}" `
     --dataset.repo_id=huitaehan/eval_smolvla_so101 `
     --dataset.single_task="Pick the object and place it" `
-    --dataset.num_episodes=5 `
-    --policy.path=outputs/train/smolvla_so101/checkpoints/last/pretrained_model `
-    --display_data=false `
-    --play_sounds=false
+    --dataset.num_episodes=10 `
+    --policy.path=outputs/train/smolvla_so101_expert/checkpoints/last/pretrained_model `
+    --display_data=true
 ```
 
-To stress-test SmolVLA under perturbations, evaluate using the safety module:
+---
 
-```powershell
-python examples/safety/robust_safety_so101_eval.py `
-    --policy-path outputs/train/smolvla_so101/checkpoints/last/pretrained_model `
-    --port COM6 `
-    --camera-index 1 `
-    --episodes 5 `
-    --perturb-enabled true
-```
+## 🛡️ Optional: Adding Safety Shields (CBF / CCM)
+
+To guarantee the arm never exceeds motor velocity, acceleration, or workspace safety limits during VLA execution, wrap SmolVLA's outputs through the safety filters:
+
+- **Control Barrier Function (CBF)**: [`examples/safety/robust_safety_so101_eval.py`](../safety/robust_safety_so101_eval.py)
+- **Contraction Control Metric (CCM)**: [`examples/ccm/`](../ccm/)
