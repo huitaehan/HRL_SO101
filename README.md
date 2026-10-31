@@ -10,7 +10,7 @@ Repository for training, evaluating, and deploying imitation learning policies o
 - **Leader Arm / Teleoperator**: SO-101 Leader (`so101_leader` with Feetech STS3215 bus)
 - **Camera**: Top-mounted camera (`opencv`, index `1`, 640x480 @ 30 FPS)
 - **Default Ports (Windows)**:
-  - Follower: `COM6`
+  - Follower: `COM8`
   - Leader: `COM7`
 
 ---
@@ -35,8 +35,58 @@ This repository is organized into self-contained workflow modules under `example
 | Module | Description | Guide |
 |---|---|---|
 | **SmolVLA** | Vision-Language-Action foundation model (`smolvla_base`) post-training & SO-101 deployment | [`examples/smolvla/README.md`](examples/smolvla/README.md) |
+| **Implicit Contraction Layers (ICL)** | Differentiable QP & Contraction Metrics for robust tracking on SO-101 ([Kim, Han, Sreenath, 2027]) | [Section Below](#-implicit-contraction-layers-icl--smolvla-integration) |
 | **Safety Filters** | Robust safety evaluation, perturbations, and Control Barrier Function (CBF) | [`examples/safety/README.md`](examples/safety/README.md) |
-| **CCM Pipeline** | Neural Contraction Control Metrics & Pinocchio SO-101 dynamics | [`examples/ccm/README.md`](examples/ccm/README.md) |
+| **CCM Pipeline** | Neural Contraction Control Metrics & SO-101 dynamics | [`examples/ccm/README.md`](examples/ccm/README.md) |
+
+---
+
+## 🛡️ Implicit Contraction Layers (ICL) & SmolVLA Integration
+
+Implementation and integration of **"Robust Reinforcement Learning-based Trajectory Tracking through Implicit Contraction Layers"** (*Mintae Kim, Huitae Han, Koushil Sreenath, 2027*).
+
+SmolVLA acts as the high-level multimodal policy (predicting nominal 5-DoF / 6-DoF joint actions), while the **Implicit Contraction Layer (ICL)** serves as the differentiable physical safety & tracking engine:
+
+```text
+Camera + Prompt ──► SmolVLA Policy ──► Proposed Action v
+                                             │
+                                             ▼
+Physical SO-101 ◄── Safe Action u* ◄── Differentiable QP Layer (ICL)
+Feedback x in R^10                      Enforcing: a(z)^T u <= b(z), u in [-1, 1]^5
+                                        Contraction Rate: rho = 0.98, R = I_5
+```
+
+### Key Components & File Locations:
+
+| Component | File Path | Description |
+| :--- | :--- | :--- |
+| **SmolVLA Adapter** | [`src/lerobot/policies/smolvla/adapter_icl.py`](src/lerobot/policies/smolvla/adapter_icl.py) | Formats observations, bounds actions, and manages gripper modes (`open` / `fixed_grasp`). |
+| **Differentiable QP** | [`implicit_contraction_layers/src/icl_core/qp.py`](implicit_contraction_layers/src/icl_core/qp.py) | Closed-form analytical active-set QP solver (`solve_box_halfspace`) with exact backward gradients. |
+| **Contraction Layer** | [`implicit_contraction_layers/src/icl_core/layer.py`](implicit_contraction_layers/src/icl_core/layer.py) | Projects action proposals to strictly satisfy the contraction inequality $\dot{E} \le -2\lambda E$. |
+| **SO-101 5-DoF Task** | [`implicit_contraction_layers/src/icl_core/so101.py`](implicit_contraction_layers/src/icl_core/so101.py) | 5-DoF environment matching paper Appendix B ($dq = [0.25, 0.25, 0.25, 0.25, 0.35]\text{ rad}$, disturbance pulse). |
+| **Experiment Config** | [`implicit_contraction_layers/experiments/so101_reach/config.yaml`](implicit_contraction_layers/experiments/so101_reach/config.yaml) | Hyperparameters matching paper Table 2 ($\rho=0.98, R=I_5, \underline{m}=0.05, \bar{m}=15.25$). |
+| **Integration Test** | [`examples/smolvla/test_smolvla_icl_integration.py`](examples/smolvla/test_smolvla_icl_integration.py) | Pure CPU sanity test verifying SmolVLAAdapter + ICL QP unification. |
+| **Interactive Sim** | [`examples/smolvla/simulate_smolvla_icl.py`](examples/smolvla/simulate_smolvla_icl.py) | Closed-loop simulator with live 3D OpenGL window (`--render`) and MP4 video export (`--save-video`). |
+| **Paper Benchmark** | [`examples/smolvla/evaluate_so101_paper_pipeline.py`](examples/smolvla/evaluate_so101_paper_pipeline.py) | Replicates paper Table 1 evaluation (Recovery %, Fallback %, $t_{95}$ latency, peak error) on sim or hardware. |
+
+### Quickstart Commands:
+
+```bash
+# 1. Verify SmolVLA + ICL Unification (Pure CPU, no hardware needed):
+python examples/smolvla/test_smolvla_icl_integration.py
+
+# 2. Run closed-loop MuJoCo simulation with live 3D window:
+python examples/smolvla/simulate_smolvla_icl.py --env reacher --render --steps 200
+
+# 3. Run the paper's exact SO-101 disturbance benchmark (Table 1 reproduction):
+python examples/smolvla/evaluate_so101_paper_pipeline.py --task reach --episodes 5
+
+# 4. Evaluate with learned ICL checkpoint (when layer/best.pt is available):
+python examples/smolvla/evaluate_so101_paper_pipeline.py --checkpoint path/to/layer/best.pt
+
+# 5. Deploy directly to physical SO-101 robot arm:
+python examples/smolvla/evaluate_so101_paper_pipeline.py --mode hardware --port COM3
+```
 
 ---
 

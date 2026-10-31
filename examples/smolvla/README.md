@@ -3,7 +3,7 @@
 This module documents and provides workflows for **SmolVLA**, a lightweight Vision-Language-Action (VLA) foundation model designed for efficient, affordable robotic manipulation with natural language task conditioning on the **SO-101 6-DoF robotic arm**.
 
 - **Core Implementation**: [`src/lerobot/policies/smolvla/`](../../src/lerobot/policies/smolvla/)
-- **Target Hardware**: SO-101 Follower Arm (`COM6`), Top Camera (`index=1`, 640x480 @ 30 FPS)
+- **Target Hardware**: SO-101 Follower Arm (`COM8`), Top Camera (`index=1`, 640x480 @ 30 FPS)
 - **Pretrained Checkpoint**: [`lerobot/smolvla_base`](https://huggingface.co/lerobot/smolvla_base) (450M parameters)
 - **Demonstration Dataset**: [`huitaehan/so101_demo`](https://huggingface.co/datasets/huitaehan/so101_demo) (48 episodes, *"Pick the object and place it"*)
 
@@ -164,9 +164,50 @@ python src/lerobot/scripts/lerobot_record.py `
 
 ---
 
-## 🛡️ Optional: Adding Safety Shields (CBF / CCM)
+## 🛡️ Implicit Contraction Layers (ICL) & Safety Shields
 
 To guarantee the arm never exceeds motor velocity, acceleration, or workspace safety limits during VLA execution, wrap SmolVLA's outputs through the safety filters:
 
 - **Control Barrier Function (CBF)**: [`examples/safety/robust_safety_so101_eval.py`](../safety/robust_safety_so101_eval.py)
-- **Contraction Control Metric (CCM)**: [`examples/ccm/`](../ccm/)
+- **Neural Contraction Metrics (CCM)**: [`examples/ccm/README.md`](../ccm/README.md)
+- **Implicit Contraction Layers (ICL)**: [`../../implicit_contraction_layers/`](../../implicit_contraction_layers/)
+
+---
+
+### 🔬 Implicit Contraction Layer (ICL) Workflow
+
+Integrates **"Robust Reinforcement Learning-based Trajectory Tracking through Implicit Contraction Layers"** (*Kim, Han, Sreenath, 2027*). SmolVLA proposes high-level 5-DoF / 6-DoF joint actions, and the differentiable QP layer projects them to guarantee exponential disturbance attenuation ($\rho = 0.98, R = I_5$).
+
+#### Files in this Module:
+
+| Script / File | Path | Purpose |
+| :--- | :--- | :--- |
+| **SmolVLA Adapter** | [`src/lerobot/policies/smolvla/adapter_icl.py`](../../src/lerobot/policies/smolvla/adapter_icl.py) | Bridges SmolVLA with ICL: bounds checking, observation formatting, 5-DoF slicing, and discrete gripper handling. |
+| **Sanity Check** | [`test_smolvla_icl_integration.py`](test_smolvla_icl_integration.py) | CPU-only verification that `SmolVLAAdapter` and `SafeBoxHalfspaceQP` are unified and properly projecting actions. |
+| **Simulation Testbed** | [`simulate_smolvla_icl.py`](simulate_smolvla_icl.py) | Closed-loop simulator with live 3D OpenGL window (`--render`) and MP4 recording (`--save-video`). |
+| **Paper Benchmark** | [`evaluate_so101_paper_pipeline.py`](evaluate_so101_paper_pipeline.py) | Replicates Table 1 metrics (Recovery %, Fallback %, $t_{95}$ latency, peak error) on sim and real hardware. |
+| **5-DoF SO-101 Task** | [`implicit_contraction_layers/src/icl_core/so101.py`](../../implicit_contraction_layers/src/icl_core/so101.py) | 5-DoF environment matching paper Appendix B ($dq = [0.25, 0.25, 0.25, 0.25, 0.35]\text{ rad}$). |
+| **Experiment Config** | [`implicit_contraction_layers/experiments/so101_reach/config.yaml`](../../implicit_contraction_layers/experiments/so101_reach/config.yaml) | Table 2 configuration: $\rho=0.98, R=I_5, \underline{m}=0.05, \bar{m}=15.25$. |
+
+#### Runnable Commands:
+
+```powershell
+# 1. Test adapter + QP layer unification (Pure CPU):
+python examples/smolvla/test_smolvla_icl_integration.py
+
+# 2. Interactive 3D simulation with live window:
+python examples/smolvla/simulate_smolvla_icl.py --env reacher --render --steps 200
+
+# 3. Export simulation video to MP4:
+python examples/smolvla/simulate_smolvla_icl.py --env reacher --save-video --steps 100
+
+# 4. Run Table 1 paper disturbance benchmark:
+python examples/smolvla/evaluate_so101_paper_pipeline.py --task reach --episodes 5
+python examples/smolvla/evaluate_so101_paper_pipeline.py --task carry --episodes 5
+
+# 5. Evaluate with learned layer/best.pt:
+python examples/smolvla/evaluate_so101_paper_pipeline.py --checkpoint path/to/layer/best.pt
+
+# 6. Deploy to real SO-101 robot arm:
+python examples/smolvla/evaluate_so101_paper_pipeline.py --mode hardware --port COM3
+```
